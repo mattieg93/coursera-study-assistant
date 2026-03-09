@@ -1,0 +1,13 @@
+# Coursera Agent Requirements
+# Automation tools for Coursera course interaction
+
+# Web automation
+playwright>=1.40.0
+asyncio-timeout>=4.0.3
+
+# AI/ML
+ollama>=0.1.0
+
+# Google Docs integration
+google-auth>=2.17.0
+google-api-python-client>=2.100.0

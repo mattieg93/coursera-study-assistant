@@ -1,0 +1,23 @@
+# Study System Requirements
+# AI-powered study assistant with OCR quiz parsing
+
+# Core dependencies
+streamlit>=1.31.0
+numpy>=1.24.0
+pillow>=10.0.0
+opencv-python>=4.8.0
+
+# AI/ML
+ollama>=0.1.0
+sentence-transformers>=2.2.0
+
+# Google Docs integration
+google-auth>=2.17.0
+google-api-python-client>=2.100.0
+
+# OCR (macOS native - recommended)
+pyobjc-framework-Vision>=10.0; sys_platform == 'darwin'
+pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'
+
+# OCR fallback (cross-platform)
+easyocr>=1.7.0
