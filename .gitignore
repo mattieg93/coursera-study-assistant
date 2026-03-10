@@ -1,2 +1,9 @@
 /.venv-1
 /src/coursera_agent/credentials.json
+.env
+/src/coursera_agent/__pycache__
+/src/study_system/__pycache__
+/src/ui/__pycache__
+study_db.pkl
+src/study_system/study_data/chromadb/study_db.pkl
+src/study_system/study_data/sessions/stats.json

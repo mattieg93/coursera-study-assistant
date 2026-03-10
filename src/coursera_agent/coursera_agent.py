@@ -9,20 +9,42 @@ from playwright.async_api import async_playwright
 import ollama
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
+from dotenv import load_dotenv
 
-# === CONFIG (UPDATE THESE) ===
-DOC_ID = "1mvwZchayzE7jhnoIa5ZkeHJuBtXc5-_CzkmkrRq_6EM"  # From Google Doc URL
-CREDENTIALS_FILE = "credentials.json"  # Service account JSON
-MODEL_NAME = "granite3.2:8b"
-OLLAMA_MODELS_PATH = "/Users/mattieg/Repos/ai_models"  # Custom models directory
-AUTO_SELECT_TAB = True  # False = prompt user to select tab, True = auto-select last tab
-PROCESS_ALL_VIDEOS = True  # False = current video only, True = iterate through remaining videos
-PROCESS_READINGS = True   # False = skip Ungraded Plugin reading items, True = include them
+# Load .env from repo root (two levels up from src/coursera_agent/)
+_REPO_ROOT = Path(__file__).parent.parent.parent
+load_dotenv(_REPO_ROOT / ".env")
 
-# Configure Ollama to use custom models directory
-os.environ["OLLAMA_MODELS"] = OLLAMA_MODELS_PATH
+# === CONFIG ===
+# Values are read from .env (or env vars already set in the shell).
+# DOC_ID is resolved at runtime — see main() below.
+DOC_ID           = os.environ.get("CSA_DOC_ID", "")   # blank = will prompt at startup
+# Credentials: CSA_CREDENTIALS_PATH env var → default alongside this file
+_default_creds   = str(Path(__file__).parent / "credentials.json")
+CREDENTIALS_FILE = os.environ.get("CSA_CREDENTIALS_PATH", "") or _default_creds
+MODEL_NAME       = os.environ.get("CSA_MODEL", "granite3.2:8b")
+OLLAMA_MODELS_PATH = os.environ.get("OLLAMA_MODELS", "")
+AUTO_SELECT_TAB  = True  # False = prompt user to select tab, True = auto-select last tab
+# These can be overridden at launch via env vars set by the UI
+PROCESS_ALL_VIDEOS = os.environ.get("CSA_ALL_VIDEOS", "true").lower() != "false"
+PROCESS_READINGS   = os.environ.get("CSA_READINGS",   "true").lower() != "false"
 
-print("Coursera Agent - Production Ready")
+# Pass the models path through to Ollama (only if configured)
+if OLLAMA_MODELS_PATH:
+    os.environ["OLLAMA_MODELS"] = OLLAMA_MODELS_PATH
+
+# Set by backend.py when launched from the Streamlit UI.
+# Skips all blocking input() prompts so the subprocess never hangs.
+UI_MODE = os.environ.get("CSA_UI_MODE", "false").lower() == "true"
+
+
+def _confirm(prompt: str) -> None:
+    """Prompt the user to press Enter, or auto-continue in UI mode."""
+    if UI_MODE:
+        print(f"{prompt} [auto-confirmed by UI]")
+    else:
+        input(prompt)
+
 
 def get_chrome_path():
     """Find Chrome/Chromium on macOS"""
@@ -81,29 +103,6 @@ async def wait_for_chrome_connection(p, max_retries=10):
             else:
                 raise Exception(f"Failed to connect to Chrome after {max_retries} attempts") from e
 
-def extract_module_name(lecture_title):
-    """Extract module name from lecture title for tab matching"""
-    # Remove common suffixes like "| Coursera", "- Lecture", etc.
-    clean_title = lecture_title.split('|')[0].strip()
-    
-    # Common patterns to extract module names
-    # "Advanced CNNs in Keras" -> "Advanced CNNs" or "Keras"
-    # "Introduction to TensorFlow 2.x" -> "TensorFlow 2.x"
-    # "Deep Learning Fundamentals" -> "Deep Learning"
-    
-    # Strategy: Keep the most significant technical terms
-    # Remove filler words but keep technical terms
-    filler_words = {'in', 'to', 'the', 'a', 'an', 'of', 'for', 'with', 'on', 'at', 'from', 'by'}
-    
-    words = clean_title.split()
-    # Keep all words except single-word fillers at start/end
-    if len(words) > 2 and words[-1].lower() in filler_words:
-        words = words[:-1]
-    if len(words) > 2 and words[0].lower() in filler_words:
-        words = words[1:]
-    
-    return ' '.join(words)
-
 def auto_select_last_tab(tabs):
     """Automatically select the last tab (highest index)"""    
     if not tabs:
@@ -154,7 +153,7 @@ def prompt_tab_selection(doc, lecture_title):
     # Prompt for selection
     while True:
         try:
-            choice = input(f"\n   Select tab (1-{len(tab_options)}) or press Enter for [1]: ").strip()
+            choice = ("" if UI_MODE else input(f"\n   Select tab (1-{len(tab_options)}) or press Enter for [1]: ")).strip()
             
             if choice == "":
                 choice = "1"
@@ -455,33 +454,6 @@ def save_doc(doc_id, title, notes):
         print(f"   Check that the service account has edit access to the doc")
         raise
 
-async def get_video_items(page):
-    """Get all video items from the current module"""
-    print("📹 Finding video items...")
-    try:
-        # Get all list items that are videos
-        items = page.locator('li:has(.outline-single-item-content-wrapper)')
-        count = await items.count()
-        
-        video_items = []
-        for i in range(count):
-            item = items.nth(i)
-            text = await item.inner_text()
-            
-            # Check if it's a video (contains "Video. Duration:" or "Video ·")
-            if "Video" in text and ("Duration:" in text or "min" in text):
-                video_items.append({
-                    'index': i,
-                    'element': item,
-                    'title': text.split('Video')[0].strip()
-                })
-        
-        print(f"   ✓ Found {len(video_items)} videos out of {count} items")
-        return video_items
-    except Exception as e:
-        print(f"   Error finding videos: {e}")
-        return []
-
 async def get_course_items(page):
     """Get all processable items (videos + Ungraded Plugin readings) from the current module"""
     print("📋 Finding course items...")
@@ -718,6 +690,27 @@ def save_progress(progress_file, completed_videos):
         json.dump({'completed': list(completed_videos)}, f, indent=2)
 
 async def main():
+    # ── Resolve Google Doc ID ──────────────────────────────────────────────
+    # Priority: CSA_DOC_ID env var (set by UI) → --doc-id arg → terminal prompt
+    import argparse as _argparse
+    _parser = _argparse.ArgumentParser(add_help=False)
+    _parser.add_argument("--doc-id", default="")
+    _args, _ = _parser.parse_known_args()
+
+    doc_id = DOC_ID or _args.doc_id
+    if not doc_id:
+        if UI_MODE:
+            print("ERROR: Google Doc ID is required. Enter it in the UI before processing.")
+            return
+        print("\nGoogle Doc ID is required.")
+        print("Find it in your Google Doc URL:")
+        print("  https://docs.google.com/document/d/<DOC_ID>/edit")
+        print("  Example: aBcDeFgHiJkLmNoPqRsTuVwXyZ1234")
+        doc_id = input("Enter Doc ID: ").strip()
+        if not doc_id:
+            print("No Doc ID provided. Exiting.")
+            return
+
     # Runtime URL input
     COURSE_URL = input("📎 Paste Coursera lecture URL: ").strip()
     if not COURSE_URL:
@@ -781,7 +774,7 @@ async def main():
                 print(f"   Expected: {COURSE_URL}")
                 print(f"   Current:  {page.url}")
 
-        input("📄 Transcript OPEN → Enter...")
+        _confirm("📄 Transcript OPEN → Enter...")
 
         if PROCESS_ALL_VIDEOS:
             # Get all processable items (videos + readings if enabled)
@@ -836,7 +829,7 @@ async def main():
                                 break
 
                             notes = await granite_notes(transcript, title)
-                            save_doc(DOC_ID, title, notes)
+                            save_doc(doc_id, title, notes)
 
                         else:  # reading
                             h1_title, content = await get_reading_content(page)
@@ -846,7 +839,7 @@ async def main():
                                 break
 
                             notes = await granite_reading_notes(content, h1_title)
-                            save_doc(DOC_ID, h1_title, notes)
+                            save_doc(doc_id, h1_title, notes)
 
                         completed_videos.add(item['title'])
                         save_progress(progress_file, completed_videos)
@@ -876,8 +869,8 @@ async def main():
 
             transcript = await get_transcript(page)
             notes = await granite_notes(transcript, title)
-            save_doc(DOC_ID, title, notes)
-            
+            save_doc(doc_id, title, notes)
+
             print("COMPLETE - Check Doc!")
 
         await page.close()

@@ -9,13 +9,16 @@ import pickle
 import re
 from pathlib import Path
 
+# Default persist dir relative to this file (not CWD)
+_DEFAULT_DB_DIR = Path(__file__).parent / "study_data" / "chromadb"
+
 
 class StudyDatabase:
     """Simple in-memory vector store for course notes"""
     
-    def __init__(self, persist_dir="./study_data/chromadb"):
+    def __init__(self, persist_dir=None):
         """Initialize vector store"""
-        self.persist_dir = Path(persist_dir)
+        self.persist_dir = Path(persist_dir) if persist_dir else _DEFAULT_DB_DIR
         self.persist_dir.mkdir(parents=True, exist_ok=True)
         
         # Lazy load sentence-transformers model
@@ -65,35 +68,46 @@ class StudyDatabase:
                 print(f"⚠️  Could not load persisted data: {e}")
     
     def add_lectures(self, lectures: list) -> None:
-        """Add parsed lectures to vector database"""
+        """Add parsed lectures to vector database, skipping any already present."""
         model = self._get_model()
-        
+
+        existing_ids = set(self.ids)
         new_documents = []
         new_metadatas = []
         new_ids = []
-        
-        for i, lecture in enumerate(lectures):
-            # Store full lecture
-            doc_id = f"{lecture['tab']}_{i}"
-            new_documents.append(lecture['content'])
-            new_metadatas.append({
-                'tab': lecture['tab'],
-                'title': lecture['title'],
-                'type': 'full_lecture'
-            })
-            new_ids.append(doc_id)
-            
-            # Also store individual sections for better retrieval
+
+        for lecture in lectures:
+            # Stable ID derived from tab + title (not loop index)
+            safe_key = re.sub(r'[^\w]', '_', f"{lecture['tab']}_{lecture['title']}")[:120]
+            doc_id = safe_key
+
+            if doc_id not in existing_ids:
+                new_documents.append(lecture['content'])
+                new_metadatas.append({
+                    'tab': lecture['tab'],
+                    'title': lecture['title'],
+                    'type': 'full_lecture'
+                })
+                new_ids.append(doc_id)
+                existing_ids.add(doc_id)
+
+            # Section chunks
             for section_type, section_content in lecture['sections'].items():
                 if section_content:
-                    section_id = f"{doc_id}_{section_type}"
-                    new_documents.append(section_content)
-                    new_metadatas.append({
-                        'tab': lecture['tab'],
-                        'title': lecture['title'],
-                        'type': section_type
-                    })
-                    new_ids.append(section_id)
+                    section_id = f"{safe_key}_{section_type}"
+                    if section_id not in existing_ids:
+                        new_documents.append(section_content)
+                        new_metadatas.append({
+                            'tab': lecture['tab'],
+                            'title': lecture['title'],
+                            'type': section_type
+                        })
+                        new_ids.append(section_id)
+                        existing_ids.add(section_id)
+
+        if not new_documents:
+            print(f"✅ Nothing new to add — all {len(lectures)} lectures already in database")
+            return
         
         # Generate embeddings
         print(f"🔄 Generating embeddings for {len(new_documents)} documents...")

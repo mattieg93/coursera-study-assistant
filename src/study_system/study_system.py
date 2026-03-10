@@ -6,7 +6,13 @@ RAG-based interactive study system for Coursera course notes
 import argparse
 import json
 import datetime
+import sys
 from pathlib import Path
+
+# Ensure this module's directory is on sys.path so bare-module siblings resolve
+_HERE = Path(__file__).parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -14,11 +20,12 @@ import ollama
 
 from study_db import StudyDatabase, parse_lectures_from_tab
 
-# Configuration
-CREDENTIALS_FILE = "../coursera_agent/credentials.json"
+# Configuration — all paths are absolute relative to this file's location
+_HERE = Path(__file__).parent
+CREDENTIALS_FILE = str(_HERE.parent / "coursera_agent" / "credentials.json")
 DOC_ID = "1mvwZchayzE7jhnoIa5ZkeHJuBtXc5-_CzkmkrRq_6EM"
 MODEL_NAME = "granite3.2:8b"
-STATS_FILE = "study_data/sessions/stats.json"
+STATS_FILE = str(_HERE / "study_data" / "sessions" / "stats.json")
 
 
 def fetch_doc_content(doc_id: str) -> dict:

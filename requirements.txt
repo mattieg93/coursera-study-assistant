@@ -1,52 +1,31 @@
-# Core dependencies
-python>=3.14
-numpy>=1.26.0
-pillow>=10.4.0
-streamlit>=1.29.0
-playwright>=1.40.0
+# Core
+streamlit>=1.31.0
+numpy>=1.24.0
+pillow>=10.0.0
 ollama>=0.1.0
-google-api-python-client>=2.100.0
+
+# Web automation (Coursera Agent)
+playwright>=1.40.0
+
+# AI / Embeddings (Study System)
+sentence-transformers>=2.2.0
+
+# Google Docs integration
 google-auth>=2.17.0
-asyncio-timeout>=4.0.3
-python-dotenv>=1.0.0
-watchdog>=3.0.0
+google-api-python-client>=2.100.0
 
-# Development and testing
-pytest>=8.0.2
-coverage>=7.3.2
-black>=24.1.0
-isort>=5.12.0
-pylint>=2.18.0
-mypy>=1.11.0
-sphinx>=5.3.0
-sphinx-rtd-theme>=1.2.7
+# OCR — macOS native (best accuracy)
+pyobjc-framework-Vision>=10.0; sys_platform == 'darwin'
+pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'
 
-# Database and storage
-chromadb>=0.4.12
-pandas>=2.1.4
-sqlalchemy>=2.0.23
-psycopg2-binary>=2.9.8
-python-slugify>=3.0.0
+# OCR fallback (cross-platform)
+easyocr>=1.7.0
 
-# OCR and image processing
-pytesseract>=0.5.0
-opencv-python>=4.8.1
-imageio>=2.32.2
-scikit-image>=0.21.2
-PyMuPDF>=1.34.10
-
-# Documentation and reporting
-markdown>=3.6.1
-pdfkit>=1.0.0
-weasyprint>=56.0
-pdfplumber>=0.7.0
-
-# System and utilities
-psutil>=6.0.0
-humanize>=3.10.1
-rich>=13.4.2
-tabulate>=0.9.0
-python-dateutil>=2.8.2
+# Image processing
+opencv-python>=4.8.0
 
 # Optional but recommended
 watchdog>=3.0.0
+
+# Environment / config
+python-dotenv>=1.0.0
