@@ -1,0 +1,73 @@
+{
+  "corrections": [
+    {
+      "timestamp": "2026-03-24T16:00:25.257178",
+      "question_number": 1,
+      "question_text": "Fill in the blank.",
+      "options": {
+        "A": "You can use the _ to ensure that all sentences have the same length after tokenization, matching the length of",
+        "B": "the longest sentence among the input sentences",
+        "C": "<eos> special token",
+        "D": "## symbol"
+      },
+      "ai_answer": "C",
+      "correct_answer": "D",
+      "correct_option_text": "## symbol"
+    },
+    {
+      "timestamp": "2026-03-25T13:49:17.643388",
+      "question_number": 1,
+      "question_text": "Your team member wants to set up a PyTorch training loop but places the model in evaluation mode before beginning training epochs. What corrections should be made to structure the training loop properly?",
+      "options": {
+        "A": "Skip setting model mode during training",
+        "B": "Use the model.eval() before training starts",
+        "C": "Replace the optimizer with a loss function",
+        "D": "Use the model.train() at the start of each training epoch"
+      },
+      "ai_answer": "D",
+      "correct_answer": "D",
+      "correct_option_text": "Use the model.train() at the start of each training epoch"
+    },
+    {
+      "timestamp": "2026-03-27T15:05:00.486501",
+      "question_number": 1,
+      "question_text": "In an encoder-decoder RNN architecture, how is the output sequence typically generated during translation? The model merges input and output vectors",
+      "options": {
+        "A": "The encoder predicts the complete output",
+        "B": "The decoder repeats the same tokens",
+        "C": "The decoder modules with RNN cells"
+      },
+      "ai_answer": "C",
+      "correct_answer": "A",
+      "correct_option_text": "The encoder predicts the complete output"
+    },
+    {
+      "timestamp": "2026-04-01T19:01:17.328283",
+      "question_number": 1,
+      "question_text": "Suppose an algorithm runs in time (200 log_2{2} (n) + 250) time in the worst case as a function of the input size n, which of the options below are correct?\r\n\r\nThe running time is \u0398(( log_{10}(n) )) since ( log_{10}(n) = f(log_2(n)/ log_2(10))) is a constant factor \u00d7 log(_2{(n)}.)\r\n\r\nIt is impossible for an algorithm to have a running time that is smaller than the input size.\r\n\r\nThe running time of the algorithm is O(( n )).",
+      "options": {
+        "A": "The running time is \u0398(( log_{10}(n) )) since ( log_{10}(n) = f(log_2(n)/ log_2(10))) is a constant factor \u00d7 log(_2{(n)}.)",
+        "B": "It is impossible for an algorithm to have a running time that is smaller than the input size.",
+        "C": "The running time of the algorithm is O(( n ))."
+      },
+      "ai_answer": "C",
+      "correct_answer": "D",
+      "correct_option_text": "Unknown"
+    },
+    {
+      "timestamp": "2026-04-12T19:07:05.770794",
+      "question_number": 1,
+      "question_text": "Consider a minheap that is presented as a tree below:",
+      "options": {
+        "A": "The minheap property is that each element is smaller than or equal to its children (if they exist).",
+        "B": "If an element 2 is inserted into the heap at the end of the array, the min heap property will continue to be true.",
+        "C": "The heap when written as an array will be [-5, 8, 4, 12, 10, 6, 19, 13, 17, 11, 12].",
+        "D": "The second smallest element of a minheap is always the second element of the array.",
+        "E": "The minheap property is that each element is smaller than its left child and larger than its right child."
+      },
+      "ai_answer": "A, C",
+      "correct_answer": "D",
+      "correct_option_text": "The second smallest element of a minheap is always the second element of the array."
+    }
+  ]
+}

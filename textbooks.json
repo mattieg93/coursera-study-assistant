@@ -1,0 +1,12 @@
+{
+  "textbooks": [
+    {
+      "id": "clrs",
+      "full_title": "Introduction to Algorithms (3rd Edition)",
+      "authors": "Cormen, Leiserson, Rivest, and Stein",
+      "abbreviations": ["CLRS"],
+      "doc_ids": ["1rpux1hcw64GATbbwHs5Zv1iDQejVbThwbrQs2ow8KsE"],
+      "chapter_regex": "CLRS Chapter (\\d+)"
+    }
+  ]
+}

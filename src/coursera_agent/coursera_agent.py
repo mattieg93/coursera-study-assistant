@@ -37,6 +37,29 @@ if OLLAMA_MODELS_PATH:
 # Skips all blocking input() prompts so the subprocess never hangs.
 UI_MODE = os.environ.get("CSA_UI_MODE", "false").lower() == "true"
 
+# ── Textbook context ──────────────────────────────────────────────────────────
+_TEXTBOOKS_FILE = _REPO_ROOT / "textbooks.json"
+try:
+    with open(_TEXTBOOKS_FILE) as _f:
+        TEXTBOOKS = json.load(_f).get("textbooks", [])
+except (FileNotFoundError, json.JSONDecodeError) as _e:
+    print(f"⚠️  textbooks.json not loaded: {_e}")
+    TEXTBOOKS = []
+
+
+def detect_book_chapter(title: str, doc_id: str, textbooks: list) -> dict | None:
+    """Return {entry, chapter_num} if the title+doc_id match a textbook entry, else None."""
+    for entry in textbooks:
+        if doc_id not in entry.get("doc_ids", []):
+            continue
+        pattern = entry.get("chapter_regex", "")
+        if not pattern:
+            continue
+        match = re.search(pattern, title, re.IGNORECASE)
+        if match:
+            return {"entry": entry, "chapter_num": int(match.group(1))}
+    return None
+
 
 def _confirm(prompt: str) -> None:
     """Prompt the user to press Enter, or auto-continue in UI mode."""
@@ -209,13 +232,24 @@ async def get_transcript(page):
         print(f" {e}")
         return ""
 
-async def granite_notes(transcript, title):
+async def granite_notes(transcript, title, book_context=None):
     """Generate formatted notes - clean text only, formatting applied later"""
     print(f"2/4 Granite3.2...")
     start = time.time()
 
-    prompt = f"""You are creating professional study notes for an IBM AI Engineering certification course.
+    _book_line = ""
+    if book_context:
+        _entry = book_context["entry"]
+        _book_line = (
+            f"\nThis is Chapter {book_context['chapter_num']} from "
+            f"{_entry['full_title']} by {_entry['authors']}. "
+            f"You have deep parametric knowledge of this textbook. "
+            f"Use it to enrich and validate these notes.\n"
+        )
+    _course_label = "graduate-level course" if book_context else "graduate-level data science course"
 
+    prompt = f"""You are creating comprehensive professional study notes for a {_course_label}.
+{_book_line}
 Lecture Title: {title}
 Transcript: {transcript}
 
@@ -227,34 +261,39 @@ FIRST LINE - Output the title EXACTLY as provided above (including "| Coursera" 
 Then continue with the sections below. Use plain text - NO bold markers, asterisks, or other formatting symbols:
 
 📊 TECHNICAL SUMMARY:
-[Write 2-3 clear sentences explaining the core technical concept]
+[3-5 clear sentences explaining the core technical concept, covering what it is, why it matters, and how it relates to the broader field]
 
 Key Features of [Main Topic]:
+[Include AS MANY features as are meaningfully present in the lecture — do not cap at 3. Each feature must have enough sub-bullets to fully convey how it works.]
 1. [First major feature]:
    • [Detail about feature]
-   • [Another detail]
+   • [Another detail — add more bullets as needed]
 2. [Second major feature]:
    • [Detail]
    • [Detail]
-3. [Third major feature]:
-   • [Detail]
+[Continue for all significant features...]
 
 Key Concepts:
-1. [Concept name]: [Brief explanation]
-2. [Concept name]: [Brief explanation]
-3. [Concept name]: [Brief explanation]
-4. [Concept name]: [Brief explanation]
+[Include EVERY distinct concept introduced in the lecture — definitions, formulas, algorithms, terms. Do not truncate.]
+1. [Concept name]: [Full explanation — enough detail that a student could answer a quiz question about it]
+2. [Concept name]: [Full explanation]
+[Continue for all concepts...]
 
-💼 BUSINESS APPLICATION:
-[2-3 sentences on real-world business value with concrete examples from 2 different industries]
+Common Misconceptions / Exam Traps:
+[List any subtle distinctions, common errors, or tricky edge cases mentioned or implied in the lecture. If none are apparent, omit this section.]
+• [Misconception or trap]
+• [Another if present]
 
-CRITICAL RULES: 
+💼 PRACTICAL APPLICATION:
+[3-5 sentences on real-world or academic applications with concrete examples. Include code patterns, architectural choices, or use-case scenarios where relevant.]
+
+CRITICAL RULES:
 - MUST start with the exact title shown above as the first line
 - NO bold markers (**), asterisks (*), or formatting symbols in the content
 - Use • for bullets
-- Keep it concise, technical, and business-focused
+- Be thorough: these notes feed a quiz/test knowledge base — omitting a concept means the AI cannot answer questions about it
 - Use colons after concept names and feature titles
-- END with the Business Application section - do NOT add any meta-commentary, instructions, or explanations after that
+- END with the Practical Application section - do NOT add any meta-commentary, instructions, or explanations after that
 - Output ONLY the notes content, nothing else"""
 
     response = ollama.chat(model=MODEL_NAME, messages=[{"role": "user", "content": prompt}])
@@ -455,7 +494,7 @@ def save_doc(doc_id, title, notes):
         raise
 
 async def get_course_items(page):
-    """Get all processable items (videos + Ungraded Plugin readings) from the current module"""
+    """Get all processable items (videos + readings) from the current module"""
     print("📋 Finding course items...")
     try:
         items = page.locator('li:has(.outline-single-item-content-wrapper)')
@@ -474,10 +513,30 @@ async def get_course_items(page):
                     'type': 'video'
                 })
             elif "Ungraded Plugin" in text and "Reading:" in text:
-                # Extract "Reading: [TITLE]" → "[TITLE]"
+                # skills.network embedded reading with explicit "Reading:" label
                 lines = [l.strip() for l in text.splitlines() if l.strip()]
                 reading_line = next((l for l in lines if l.startswith('Reading:')), None)
                 title = reading_line[len('Reading:'):].strip() if reading_line else text.split('Ungraded Plugin')[0].strip()
+                course_items.append({
+                    'index': i,
+                    'element': item,
+                    'title': title,
+                    'type': 'reading'
+                })
+            elif "Ungraded Plugin" in text and "Ungraded App Item" not in text:
+                # Ungraded Plugin without an explicit "Reading:" label — still a reading
+                lines = [l.strip() for l in text.splitlines() if l.strip()]
+                title = lines[0] if lines else text.split('Ungraded Plugin')[0].strip()
+                course_items.append({
+                    'index': i,
+                    'element': item,
+                    'title': title,
+                    'type': 'reading'
+                })
+            elif "Reading" in text and "min" in text and "Ungraded Plugin" not in text and "Video" not in text:
+                # Native Coursera reading (e.g. "CLRS Chapter 2\nReading • 10 min")
+                lines = [l.strip() for l in text.splitlines() if l.strip()]
+                title = lines[0] if lines else text.strip()
                 course_items.append({
                     'index': i,
                     'element': item,
@@ -510,8 +569,31 @@ async def get_reading_content(page):
                 break
 
         if not reading_frame:
-            print("   ⚠️ No reading iframe found")
-            return None, None
+            print("   ℹ️  No skills.network iframe — trying main page content...")
+            # Native Coursera reading: extract content from the main frame
+            h1_title = await page.evaluate("""() => {
+                const h1 = document.querySelector('h1');
+                return h1 ? h1.innerText.trim() : '';
+            }""")
+            content = await page.evaluate("""() => {
+                // Try Coursera native reading content containers
+                const selectors = [
+                    '[data-testid="reading-content"]',
+                    '.rc-CML',
+                    '.reading-content',
+                    'article',
+                ];
+                for (const sel of selectors) {
+                    const el = document.querySelector(sel);
+                    if (el) return el.innerText.trim();
+                }
+                return '';
+            }""")
+            if content:
+                print(f"   ✓ h1: '{h1_title}', main-frame content: {len(content)} chars")
+            else:
+                print(f"   ℹ️  No main-frame content found — will use parametric knowledge if book context available")
+            return h1_title or "", content or None
 
         await reading_frame.wait_for_load_state("domcontentloaded", timeout=20000)
         await reading_frame.wait_for_timeout(1000)
@@ -570,16 +652,38 @@ async def get_reading_content(page):
         print(f"   Error extracting reading content: {e}")
         return None, None
 
-async def granite_reading_notes(content, h1_title):
+async def granite_reading_notes(content, h1_title, book_context=None):
     """Generate structured study notes from reading content using Ollama"""
     print("🤖 2/4 Granite3.2 (reading)...")
     start = time.time()
 
-    prompt = f"""You are creating professional study notes for an IBM AI Engineering certification course.
+    _book_line = ""
+    if book_context:
+        _entry = book_context["entry"]
+        _book_line = (
+            f"\nThis is Chapter {book_context['chapter_num']} from "
+            f"{_entry['full_title']} by {_entry['authors']}. "
+            f"You have deep parametric knowledge of this textbook. "
+            f"Use it to enrich and validate these notes.\n"
+        )
+    _course_label = "graduate-level course" if book_context else "graduate-level data science course"
 
+    # When no DOM content is available (e.g. native Coursera CLRS pointer pages),
+    # generate notes purely from the model's parametric knowledge of the chapter.
+    if not content:
+        print("   ℹ️  No DOM content — generating from parametric knowledge only")
+        _content_block = (
+            f"There is no reading content to extract from this page. "
+            f"Generate comprehensive notes for this chapter based entirely on "
+            f"your parametric knowledge of the textbook described above."
+        )
+    else:
+        _content_block = f"Reading Content:\n{content}"
+
+    prompt = f"""You are creating professional study notes for a {_course_label}.
+{_book_line}
 Reading Title: {h1_title}
-Reading Content:
-{content}
+{_content_block}
 
 Create notes with this EXACT structure:
 
@@ -607,16 +711,16 @@ Key Concepts:
 3. [Concept name]: [Brief explanation]
 4. [Concept name]: [Brief explanation]
 
-💼 BUSINESS APPLICATION:
-[2-3 sentences on real-world business value with concrete examples from 2 different industries]
+💼 PRACTICAL APPLICATION:
+[2-3 sentences on real-world or academic applications with concrete examples]
 
 CRITICAL RULES:
 - MUST start with the exact title shown above as the first line
 - NO bold markers (**), asterisks (*), or formatting symbols in the content
 - Use • for bullets
-- Keep it concise, technical, and business-focused
+- Keep it concise, technical, and academically rigorous
 - Use colons after concept names and feature titles
-- END with the Business Application section - do NOT add any meta-commentary or explanations after that
+- END with the Practical Application section - do NOT add any meta-commentary or explanations after that
 - Output ONLY the notes content, nothing else"""
 
     response = ollama.chat(model=MODEL_NAME, messages=[{"role": "user", "content": prompt}])
@@ -828,17 +932,25 @@ async def main():
                                 print(f"   ⚠️ No transcript found, skipping...")
                                 break
 
-                            notes = await granite_notes(transcript, title)
+                            book_ctx = detect_book_chapter(title, doc_id, TEXTBOOKS)
+                            notes = await granite_notes(transcript, title, book_context=book_ctx)
                             save_doc(doc_id, title, notes)
 
                         else:  # reading
                             h1_title, content = await get_reading_content(page)
 
-                            if not content:
-                                print(f"   ⚠️ No reading content found, skipping...")
+                            # Use the item title as fallback if page didn't return one
+                            h1_title = h1_title or item['title']
+
+                            if not content and not book_ctx:
+                                book_ctx = detect_book_chapter(h1_title, doc_id, TEXTBOOKS)
+
+                            if not content and not book_ctx:
+                                print(f"   ⚠️ No reading content and no textbook context, skipping...")
                                 break
 
-                            notes = await granite_reading_notes(content, h1_title)
+                            book_ctx = book_ctx or detect_book_chapter(h1_title, doc_id, TEXTBOOKS)
+                            notes = await granite_reading_notes(content, h1_title, book_context=book_ctx)
                             save_doc(doc_id, h1_title, notes)
 
                         completed_videos.add(item['title'])
@@ -868,7 +980,8 @@ async def main():
             print(f"📚 {title}")
 
             transcript = await get_transcript(page)
-            notes = await granite_notes(transcript, title)
+            book_ctx = detect_book_chapter(title, doc_id, TEXTBOOKS)
+            notes = await granite_notes(transcript, title, book_context=book_ctx)
             save_doc(doc_id, title, notes)
 
             print("COMPLETE - Check Doc!")

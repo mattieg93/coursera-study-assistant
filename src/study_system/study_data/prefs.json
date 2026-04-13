@@ -1,0 +1,4 @@
+{
+  "agent_model": "gemma4:latest",
+  "vision_model": "gemma4:latest"
+}

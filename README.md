@@ -31,14 +31,24 @@ pip install -r requirements.txt
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `CSA_DOC_ID` | Google Doc ID for course notes | *(required for sync)* |
+| `CSA_DOC_ID` | Google Doc ID for course notes | *(optional — falls back to first entry in docs.json)* |
 | `CSA_MODEL` | Ollama model name | `granite3.2:8b` |
-| `OLLAMA_MODELS` | Custom Ollama models directory | *(Ollama default)* |
+| `OLLAMA_MODELS` | Handles custom Ollama models directory | *(Ollama default)* |
 | `CSA_CREDENTIALS_PATH` | Override path to `credentials.json` | `src/coursera_agent/credentials.json` |
 
 ---
 
 ## Changelog
+
+### v0.4.0 — Multi-doc support, per-course vector DB, model propagation
+- **Google Doc registry** — sidebar replaces plain Doc ID text input with a selectbox backed by `docs.json`; Add and Edit/Delete modals with service-account email hint
+- **Per-course vector DB isolation** — `StudyDatabase(doc_id=...)` writes a separate `study_db_{doc_id}.pkl` per doc; the in-memory store reloads automatically when the active doc changes
+- **Model selection propagates to RAG** — `answer_question()` now accepts a `model` parameter; the sidebar model selector applies to both the Coursera Agent subprocess and all Study Assistant queries
+- **Ollama model auto-discovery** — sidebar model selector queries the local Ollama API and lists available models; falls back to text input if Ollama is not running
+- **LLM prompt improvements** — BUSINESS APPLICATION section renamed to PRACTICAL APPLICATION; course-type label in prompt is now dynamic (`graduate-level data science course` vs `graduate-level course` when textbook context is present)
+- `CSA_DOC_ID` is now optional: if unset, the first entry in `docs.json` is used
+- **Custom Ollama sudo fix** - Launching /.launch.sh in a custom location resulted in conflicting calls when Ollama was in a custom location. This is fixed.
+
 
 ### v0.3.0 — Streamlit UI overhaul & 3-tab layout
 - Restructured into three tabs: **Study Assistant**, **Coursera Agent**, **Expand Knowledge Base**

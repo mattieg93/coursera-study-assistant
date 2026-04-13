@@ -86,13 +86,25 @@ echo ""
 # ── Step 2: Ollama ───────────────────────────────────────────────────────────
 echo "▶ [2/3] Checking Ollama..."
 
+# Helper: authenticate sudo once (only called when Ollama needs to be started)
+_sudo_auth() {
+    if [[ -n "$OLLAMA_MODELS_PATH" ]]; then
+        if ! sudo -n true 2>/dev/null; then
+            echo "  → Custom OLLAMA_MODELS path set. sudo required to start Ollama."
+            echo "  → Enter your password when prompted:"
+            sudo -v || { echo "  ✗ sudo authentication failed."; exit 1; }
+        fi
+    fi
+}
+
 if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
-    MODEL_FOUND=$(curl -s http://localhost:11434/api/tags | grep -c "$MODEL_NAME" || true)
+    MODEL_FOUND=$(ollama list 2>/dev/null | grep -cF "$MODEL_NAME" || echo 0)
     if [[ "$MODEL_FOUND" -gt 0 ]]; then
         echo "  ✓ Ollama running with $MODEL_NAME"
     else
         echo "  ⚠ Ollama running but $MODEL_NAME not visible — restarting with correct model path..."
-        sudo pkill -f "ollama serve" 2>/dev/null || true
+        _sudo_auth
+        pkill -f "ollama serve" 2>/dev/null || true
         sleep 2
         if [[ -n "$OLLAMA_MODELS_PATH" ]]; then
             sudo OLLAMA_MODELS="$OLLAMA_MODELS_PATH" ollama serve &>/tmp/ollama.log &
@@ -104,6 +116,7 @@ if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
     fi
 else
     echo "  → Starting Ollama..."
+    _sudo_auth
     if [[ -n "$OLLAMA_MODELS_PATH" ]]; then
         sudo OLLAMA_MODELS="$OLLAMA_MODELS_PATH" ollama serve &>/tmp/ollama.log &
     else
@@ -113,7 +126,7 @@ else
     sleep 4
 fi
 
-MODEL_FOUND=$(curl -s http://localhost:11434/api/tags | grep -c "$MODEL_NAME" || true)
+MODEL_FOUND=$(ollama list 2>/dev/null | grep -cF "$MODEL_NAME" || echo 0)
 if [[ "$MODEL_FOUND" -eq 0 ]]; then
     echo "  ✗ ERROR: $MODEL_NAME still not available."
     echo "    If using a custom models path, ensure OLLAMA_MODELS is set in .env"

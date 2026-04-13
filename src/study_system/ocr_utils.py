@@ -4,6 +4,8 @@
 from PIL import Image, ImageEnhance, ImageOps
 import re
 import io
+import base64
+import json
 import numpy as np
 import sys
 
@@ -108,6 +110,229 @@ def extract_text_with_vision(image):
     except Exception as e:
         return f"Error with Vision OCR: {e}"
 
+# ── Vision-model quiz extraction (Ollama multimodal) ─────────────────────────
+
+_VISION_PROMPT = """\
+You are a verbatim quiz transcriber. Transcribe every question from this screenshot into JSON — character for character, exactly as printed.
+
+Return ONLY a raw JSON array. No markdown fences. No commentary. Just the JSON.
+
+[
+  {
+    "number": 1,
+    "type": "single",
+    "text": "Exact question text copied character-for-character from the image",
+    "options": [
+      {"letter": "A", "text": "Exact option text"},
+      {"letter": "B", "text": "Exact option text"},
+      {"letter": "C", "text": "Exact option text"},
+      {"letter": "D", "text": "Exact option text"},
+      {"letter": "E", "text": "Exact option text — include if visible"},
+      {"letter": "F", "text": "Exact option text — include if visible"}
+    ]
+  }
+]
+
+MANDATORY rules — violating any of these is an error:
+1. "type" field:
+   - Use "multi" when the question uses CHECKBOXES (square □ boxes) or contains the words "Select all" / "Choose all" / "check all" / "all correct facts".
+   - Use "single" for radio buttons (round ○ buttons) or when only one answer is possible.
+2. Options: count EVERY option visible in the screenshot — there may be 5, 6, or more. Assign letters A, B, C, D, E, F, ... sequentially. You MUST NOT stop early; if you see 6 options, output all 6.
+3. VERBATIM copy. Do not paraphrase, simplify, or reword anything — question text or option text.
+4. Pseudocode / code blocks: include the full code as the question text, with line breaks represented as \\n. Copy every character: brackets, operators, indentation, semicolons.
+   - Array indexing a[k], A[1..n], A[lo..hi] — copy exactly.
+5. Math notation:
+   - Superscripts rendered as small raised glyphs (n², n³): output as n^2, n^3.
+   - Unicode Greek letters (Θ, Ω, Ω): keep as-is. Do NOT convert to LaTeX (\\Theta, \\Omega).
+   - Complexity: O(n^2), Θ(n^2), Ω(n) — copy the symbol and argument verbatim.
+   - Arithmetic: c1 + n*(c2+c3+c4) + c5, T(n) = T(n/2) + Θ(1) — copy exactly.
+   - Subscripts: copy whichever form is visible (c1, c_1, c₁).
+6. If options use checkboxes, bullets, or numbers instead of letters, still output "A"/"B"/"C"... in JSON, but copy option text verbatim.
+"""
+
+
+# Keep standard whitespace escapes (\n \r \t) and structural ones (\\ \" \/ \uXXXX).
+# Strip \b (backspace) and \f (form-feed) — never intentional in quiz content but
+# collide with LaTeX keywords \beta→\b+eta and \frac→\f+rac.
+_JSON_ESCAPE_CHARS = set('"\\\/ nrt')
+
+
+def _repair_json(raw: str) -> str:
+    """Fix invalid backslash escapes that LLMs emit inside JSON strings.
+
+    Vision models often output LaTeX (\frac, \omega) and pseudocode characters
+    (\[, \*) inside JSON string values.  Strip the backslash so json.loads
+    can parse the rest of the string cleanly.
+    """
+    result = []
+    i = 0
+    while i < len(raw):
+        ch = raw[i]
+        if ch == '\\' and i + 1 < len(raw):
+            nxt = raw[i + 1]
+            if nxt in _JSON_ESCAPE_CHARS or nxt == 'u':
+                # Valid JSON escape — keep as-is
+                result.append(ch)
+                result.append(nxt)
+                i += 2
+            else:
+                # Invalid / LaTeX escape — drop the backslash, keep the character
+                result.append(nxt)
+                i += 2
+        else:
+            result.append(ch)
+            i += 1
+    return ''.join(result)
+
+
+# ── Post-parse math cleanup ───────────────────────────────────────────────────
+_FRAC_RE = re.compile(r'r?ac\{([^{}]*)\}\{([^{}]*)\}')
+
+
+def _clean_math(text: str) -> str:
+    """Normalise LaTeX artifacts left in text after JSON parsing."""
+    # frac{a}{b} or rac{a}{b} (\frac → frac after backslash stripped) → (a/b)
+    text = _FRAC_RE.sub(lambda m: f'({m.group(1)}/{m.group(2)})', text)
+    # n^{expr} → n^expr (simple int) or n^(expr)
+    def _exp(m):
+        inner = m.group(1)
+        return f'^{inner}' if re.match(r'^[\w/]+$', inner) else f'^({inner})'
+    text = re.sub(r'\^\{([^}]+)\}', _exp, text)
+    # Greek/math keywords left bare after backslash stripping
+    for src, dst in [
+        ('Theta', 'Θ'), ('theta', 'θ'),
+        ('Omega', 'Ω'), ('omega', 'ω'),
+        ('Alpha', 'Α'), ('alpha', 'α'),
+        ('Beta', 'Β'),  ('beta', 'β'),
+        ('Gamma', 'Γ'), ('gamma', 'γ'),
+        ('Delta', 'Δ'), ('delta', 'δ'),
+        ('Sigma', 'Σ'), ('sigma', 'σ'),
+        ('infty', '∞'), ('cdot', '·'),
+        ('times', '×'), ('leq', '≤'), ('geq', '≥'),
+        ('neq', '≠'), ('sqrt', '√'),
+    ]:
+        text = text.replace(src, dst)
+    return text
+
+
+def detect_vision_model(preferred: str = "minicpm-v") -> str | None:
+    """Return the name of an available Ollama vision model, preferring `preferred`."""
+    try:
+        import ollama
+        models = ollama.list().models or []
+        names = [m.model for m in models if m.model]
+        # Exact prefix match on preferred first
+        for name in names:
+            if name.startswith(preferred):
+                return name
+        # Any vision-capable model (common naming conventions)
+        for name in names:
+            lower = name.lower()
+            if any(tag in lower for tag in ("-v:", "-v-", "vl:", "vl-", "vision", "minicpm", "llava", "moondream")):
+                return name
+        return None
+    except Exception:
+        return None
+
+
+def extract_questions_with_vision_model(
+    image_file, model: str | None = None
+) -> list[dict] | None:
+    """Use an Ollama vision model to extract structured quiz questions from a screenshot.
+
+    Returns a list of question dicts compatible with parse_multiple_choice_questions output,
+    or None if extraction fails (caller should fall back to OCR).
+    """
+    _model = model or detect_vision_model()
+    if not _model:
+        print("   ℹ️  No Ollama vision model available — falling back to OCR")
+        return None
+
+    try:
+        import ollama
+
+        # Read image bytes and encode to base64
+        if hasattr(image_file, "read"):
+            image_file.seek(0)
+            img_bytes = image_file.read()
+            image_file.seek(0)
+        else:
+            with open(image_file, "rb") as f:
+                img_bytes = f.read()
+
+        b64 = base64.b64encode(img_bytes).decode("utf-8")
+
+        print(f"   🔬 Extracting questions via {_model}...")
+        response = ollama.chat(
+            model=_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": _VISION_PROMPT,
+                    "images": [b64],
+                }
+            ],
+        )
+        raw = response["message"]["content"].strip()
+
+        # Strip markdown fences — model sometimes wraps JSON anyway
+        raw = re.sub(r"^```(?:json)?\s*\n?", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"\n?```\s*$", "", raw)
+
+        parsed = json.loads(_repair_json(raw))
+
+        # Some models wrap the array: {"questions": [...]} or {"data": [...]}
+        if isinstance(parsed, dict) and not isinstance(parsed, list):
+            for v in parsed.values():
+                if isinstance(v, list):
+                    parsed = v
+                    break
+
+        if not isinstance(parsed, list) or not parsed:
+            print(f"   ⚠️  Vision model returned empty or non-list JSON (raw preview: {raw[:200]!r})")
+            return None
+
+        questions = parsed
+
+        # Normalise to the same shape parse_multiple_choice_questions produces
+        _MULTI_RE = re.compile(
+            r'select all'          # "select all that apply" / "select all correct"
+            r'|choose all'         # "choose all that apply"
+            r'|check all'          # "check all that apply"
+            r'|all that apply'     # explicit
+            r'|all correct facts'  # Coursera-specific phrasing
+            r'|correct answers'    # plural "answers" — singular "answer" is single-choice
+            r'|select.*correct.*(?:answers|facts)',  # catch wider Coursera variants
+            re.IGNORECASE,
+        )
+        normalised = []
+        for q in questions:
+            opts = [
+                {"letter": o.get("letter", ""), "text": _clean_math(o.get("text", ""))}
+                for o in q.get("options", [])
+            ]
+            q_text = _clean_math(q.get("text", ""))
+            # Override type from question text — vision models can't reliably
+            # distinguish checkbox □ from radio ○ by shape alone.
+            q_type = "multi" if _MULTI_RE.search(q_text) else q.get("type", "single")
+            normalised.append({
+                "number": q.get("number", len(normalised) + 1),
+                "type": q_type,
+                "text": q_text,
+                "options": opts,
+            })
+
+        print(f"   ✓ Vision model extracted {len(normalised)} question(s)")
+        return normalised
+
+    except json.JSONDecodeError as e:
+        print(f"   ⚠️  Vision model JSON parse error: {e} — falling back to OCR")
+        return None
+    except Exception as e:
+        print(f"   ⚠️  Vision model extraction failed: {e} — falling back to OCR")
+        return None
+
+
 def extract_text_from_image(image_file):
     """Extract text from an image using OCR with preprocessing"""
     try:
@@ -136,6 +361,58 @@ def extract_text_from_image(image_file):
 
 def parse_multiple_choice_questions(text):
     """Parse multiple choice questions from extracted text (flexible format)"""
+
+    # ── Fast path: "Select all that apply" / checkbox-style format ────────────
+    # These questions have a code/prose block THEN an instruction line THEN
+    # sentence-length options.  The generic parser mistakes code lines for options.
+    select_all_match = re.search(
+        r'(?:select all|choose all|check all|select the correct answers|please select(?:\s+all))[^\n]*',
+        text,
+        re.IGNORECASE,
+    )
+    if select_all_match:
+        question_text = text[:select_all_match.start()].strip()
+        after = text[select_all_match.end():].strip()
+
+        # Group physical lines into options.
+        # A new option starts with a checkbox/bullet marker (•, O/○/□ read by OCR, ●, etc.).
+        # Lines that don't start with a marker are continuations of the previous option.
+        _BULLET_RE = re.compile(r'^[O\u25a1\u25cb\u25cf\u2022\u25e6\*\-]\s+', re.UNICODE)
+        raw_options = []
+        current_parts: list[str] = []
+        for raw_line in after.split('\n'):
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            if _BULLET_RE.match(stripped):
+                # New option — flush previous
+                if current_parts:
+                    raw_options.append(' '.join(current_parts))
+                current_parts = [_BULLET_RE.sub('', stripped).strip()]
+            elif not current_parts and len(stripped) > 15:
+                # First option with no bullet marker
+                current_parts = [stripped]
+            elif current_parts and len(stripped) > 5:
+                # Continuation of the current option
+                current_parts.append(stripped)
+        if current_parts:
+            raw_options.append(' '.join(current_parts))
+
+        # Filter out any very short fragments that slipped through
+        raw_options = [o for o in raw_options if len(o) > 15]
+
+        if raw_options:
+            opts = [
+                {'letter': chr(65 + idx), 'text': opt}
+                for idx, opt in enumerate(raw_options[:8])
+            ]
+            return [{
+                'number': '1',
+                'type': 'multi',
+                'text': question_text,
+                'options': opts,
+            }]
+    # ── Generic parser (single-answer, lettered options) ─────────────────────
     questions = []
     lines = text.split('\n')
     
@@ -335,40 +612,71 @@ def format_question_for_display(question):
     return output
 
 def format_question_for_rag(question):
-    """Format a question for RAG query"""
-    # Create a clear question for the RAG system
+    """Format a question for RAG query, handling both single and multi-select."""
+    is_multi = question.get("type", "single") == "multi"
     query = f"{question['text']}\n\nOptions:\n"
     for option in question['options']:
         query += f"{option['letter']}) {option['text']}\n"
-    
-    query += "\nWhich option is correct? Please start your answer with 'Answer: [LETTER]' (where LETTER is A, B, C, or D), then provide a detailed explanation."
-    
+
+    if is_multi:
+        query += (
+            "\nThis is a 'select all that apply' question. "
+            "Which options are correct? "
+            "Please start your answer with 'Answers: A, C' (listing every correct letter separated by commas), "
+            "then provide a brief explanation for each correct option."
+        )
+    else:
+        letters = ", ".join(
+            o["letter"] for o in question.get("options", [])
+        ) or "A, B, C, D"
+        query += (
+            f"\nWhich single option is correct? "
+            f"Please start your answer with 'Answer: [LETTER]' (where LETTER is one of {letters}), "
+            "then provide a detailed explanation."
+        )
     return query
 
 def extract_answer_letter(rag_response):
-    """Extract the answer letter (A, B, C, or D) from RAG response
-    
-    Args:
-        rag_response: The RAG system's response text
-        
-    Returns:
-        str: The answer letter (A, B, C, or D), or None if not found
-    """
-    import re
-    
-    # Look for "Answer: X" pattern at the start
-    match = re.search(r'Answer:\s*([A-D])', rag_response, re.IGNORECASE)
+    """Extract a single answer letter from a RAG response."""
+    # Look for "Answer: X" pattern
+    match = re.search(r'Answer:\s*([A-F])', rag_response, re.IGNORECASE)
     if match:
         return match.group(1).upper()
-    
-    # Fallback: Look for "The correct answer is X" or "X is correct"
-    match = re.search(r'(?:correct answer is|answer is)\s*([A-D])', rag_response, re.IGNORECASE)
+
+    # Fallback: "The correct answer is X" / "answer is X"
+    match = re.search(r'(?:correct answer is|answer is)\s*([A-F])', rag_response, re.IGNORECASE)
     if match:
         return match.group(1).upper()
-    
-    # Another fallback: "Option X is correct"
-    match = re.search(r'Option\s*([A-D])\s*is\s*correct', rag_response, re.IGNORECASE)
+
+    # "Option X is correct"
+    match = re.search(r'Option\s*([A-F])\s*is\s*correct', rag_response, re.IGNORECASE)
     if match:
         return match.group(1).upper()
-    
+
     return None
+
+
+def extract_answer_letters(rag_response):
+    """Extract multiple answer letters from a multi-select RAG response.
+
+    Returns a sorted list of unique uppercase letters, e.g. ['A', 'C', 'E'].
+    """
+    # "Answers: A, C, E" or "Answers: A/C/E"
+    match = re.search(
+        r'Answers?:\s*([A-F](?:\s*[,/]\s*[A-F])*)',
+        rag_response,
+        re.IGNORECASE,
+    )
+    if match:
+        return sorted(set(re.findall(r'[A-F]', match.group(1).upper())))
+
+    # Fallback: scan for "A is correct", "option C is correct", etc.
+    hits = re.findall(
+        r'(?:option\s*)?([A-F])\s+(?:is|are)\s+correct',
+        rag_response,
+        re.IGNORECASE,
+    )
+    if hits:
+        return sorted(set(h.upper() for h in hits))
+
+    return []

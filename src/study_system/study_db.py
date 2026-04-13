@@ -16,10 +16,20 @@ _DEFAULT_DB_DIR = Path(__file__).parent / "study_data" / "chromadb"
 class StudyDatabase:
     """Simple in-memory vector store for course notes"""
     
-    def __init__(self, persist_dir=None):
-        """Initialize vector store"""
+    def __init__(self, persist_dir=None, doc_id: str = ""):
+        """Initialize vector store.
+
+        Parameters
+        ----------
+        persist_dir : str | Path | None
+            Directory for the pickle file. Defaults to study_data/chromadb/.
+        doc_id : str
+            When provided, the pickle is named study_db_{doc_id}.pkl so each
+            Google Doc gets its own isolated database.
+        """
         self.persist_dir = Path(persist_dir) if persist_dir else _DEFAULT_DB_DIR
         self.persist_dir.mkdir(parents=True, exist_ok=True)
+        self._pkl_name = f"study_db_{doc_id}.pkl" if doc_id else "study_db.pkl"
         
         # Lazy load sentence-transformers model
         self.model = None
@@ -49,12 +59,12 @@ class StudyDatabase:
             'embeddings': self.embeddings,
             'ids': self.ids
         }
-        with open(self.persist_dir / "study_db.pkl", 'wb') as f:
+        with open(self.persist_dir / self._pkl_name, 'wb') as f:
             pickle.dump(data, f)
     
     def _load_from_disk(self) -> None:
         """Load database from disk if it exists"""
-        db_file = self.persist_dir / "study_db.pkl"
+        db_file = self.persist_dir / self._pkl_name
         if db_file.exists():
             try:
                 with open(db_file, 'rb') as f:
@@ -208,10 +218,13 @@ def parse_sections(content: str) -> dict:
         sections['features'] = extract_between(content, 'Key Features', 'Key Concepts')
     
     if 'Key Concepts' in content:
-        sections['concepts'] = extract_between(content, 'Key Concepts', '💼 BUSINESS APPLICATION')
+        _app_marker = '💼 PRACTICAL APPLICATION' if '💼 PRACTICAL APPLICATION' in content else '💼 BUSINESS APPLICATION'
+        sections['concepts'] = extract_between(content, 'Key Concepts', _app_marker)
     
-    if '💼 BUSINESS APPLICATION' in content:
-        sections['business'] = extract_after(content, '💼 BUSINESS APPLICATION')
+    if '💼 PRACTICAL APPLICATION' in content:
+        sections['application'] = extract_after(content, '💼 PRACTICAL APPLICATION')
+    elif '💼 BUSINESS APPLICATION' in content:
+        sections['application'] = extract_after(content, '💼 BUSINESS APPLICATION')
     
     return sections
 

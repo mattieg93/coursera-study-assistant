@@ -7,3 +7,6 @@
 study_db.pkl
 src/study_system/study_data/chromadb/study_db.pkl
 src/study_system/study_data/sessions/stats.json
+/.ai
+*.pkl
+*/quiz_feedback.json
